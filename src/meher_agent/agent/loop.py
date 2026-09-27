@@ -276,6 +276,7 @@ class _Run:
         self.loop_escalated = False
         self.tool_calls_seen = 0
         self.tool_attempted = 0
+        self.tool_calls_succeeded = 0
         self.lead_saved = False
 
     # -- entry points -------------------------------------------------------
@@ -336,6 +337,27 @@ class _Run:
 
     # -- the loop -----------------------------------------------------------
 
+    def _deterministic_escalate(self) -> str | None:
+        """Escalate a complaint without waiting for the model to call the tool.
+
+        A complaint is the one thing that must never be missed: the customer has
+        a problem and needs a human. The guard detects it deterministically from
+        the message text, so the loop escalates immediately — the same way a lead
+        is captured deterministically. This also saves a model call, because the
+        guard writes the apology and handoff text itself.
+        """
+        if self.briefing is None:
+            return None
+        try:
+            intent = self.services.guard.detect_intent(self.briefing, self.quote)
+        except Exception:  # noqa: BLE001 - a detector failure must not skip the answer
+            return None
+        if intent not in _COMPLAINT_INTENTS and intent not in _LEAD_INTENTS:
+            return None
+        if self.loop_escalated or self.handoff:
+            return None
+        return self._escalate_and_reply("customer raised a complaint")
+
     def _model_loop(self) -> str:
         """Ask the model until it produces a clean draft, or the budget runs out."""
         schemas = tool_schemas()
@@ -349,11 +371,15 @@ class _Run:
             if response.tool_calls:
                 self._run_tools(response, messages)
                 continue
-            # A 7B model asked to call a tool often writes the call into its
-            # answer instead of the tool channel. Rescue it here, before deciding
-            # to nudge: nudging first loses the call, because the model's second
-            # answer drops the fragment the first one carried.
             rescued = self._rescue_prose_calls(response.content)
+            # The model answered but did not escalate. The guard already detected
+            # the complaint, so the loop escalates on its behalf — the same way a
+            # lead is captured when the model forgets the tool. The model's reply
+            # is discarded because the guard writes the apology and handoff.
+            if not self.loop_escalated and not self.handoff:
+                fallback = self._deterministic_escalate()
+                if fallback is not None:
+                    return fallback
             # The model made no attempt to call a tool at all: it answered and
             # forgot. The details are all in the message, so the loop saves the
             # lead itself, which costs no model call. A model that *did* call a
@@ -361,12 +387,12 @@ class _Run:
             # the customer to correct a bad phone rather than guessing at one.
             if not self.tool_attempted and not self.lead_saved and self._deterministic_lead():
                 return rescued or response.content
-            if self.tool_calls_seen and rescued.strip():
+            if self.tool_calls_succeeded and rescued.strip():
                 if rescued != response.content:
                     messages.append({"role": "assistant", "content": response.content})
                     messages.append({"role": "user", "content": NUDGE_TOOL})
                 return rescued
-            if wants_nudge and self.tool_calls_seen == 0 and self.budget.remaining:
+            if wants_nudge and not self.lead_saved and not self.loop_escalated and self.budget.remaining:
                 wants_nudge = False
                 self.intent_repairs += 1
                 if response.content.strip():
@@ -424,10 +450,12 @@ class _Run:
             )
             if not result.ok:
                 self.tool_errors.append(f"{call.name}: {result.error or 'tool call rejected'}")
-            elif call.name == "escalate":
-                self.handoff = True
-            elif call.name == "save_lead":
-                self.lead_saved = True
+            else:
+                self.tool_calls_succeeded += 1
+                if call.name == "escalate":
+                    self.handoff = True
+                elif call.name == "save_lead":
+                    self.lead_saved = True
 
     def _wants_tool_repair(self) -> bool:
         if not self.services.config.agent.allow_intent_repair or self.briefing is None:

@@ -417,11 +417,11 @@ def test_health_caches_the_llm_check(client: TestClient, services: StubServices)
 # --------------------------------------------------------------------------
 
 
-def test_index_points_at_the_three_endpoints(client: TestClient) -> None:
-    body = client.get("/").json()
-    assert body["endpoints"]["chat"].startswith("POST /chat")
-    assert body["endpoints"]["leads"] == "GET /leads"
-    assert body["endpoints"]["health"] == "GET /health"
+def test_index_serves_the_chat_page(client: TestClient) -> None:
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "Meher Sweets" in resp.text
 
 
 def test_services_dependency_reads_app_state() -> None:

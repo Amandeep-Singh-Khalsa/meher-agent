@@ -7,6 +7,7 @@ payload keeps the four contracted keys and nothing else.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -17,7 +18,7 @@ from typing import Annotated, Any, AsyncIterator
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from ..agent.services import Services, get_services
 from ..config import get_config
@@ -123,6 +124,113 @@ def get_services_dep() -> Services:
 
 ServicesDep = Annotated[Services, Depends(get_services_dep)]
 
+_CHAT_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meher Sweets &amp; Namkeen — AI Assistant</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #faf7f2; color: #2d2a26; height: 100vh; display: flex; flex-direction: column; }
+  header { background: #8b1e1e; color: #fff; padding: 14px 20px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 1.1rem; font-weight: 600; }
+  header span { font-size: .8rem; opacity: .8; }
+  #chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 75%; padding: 10px 14px; border-radius: 12px; line-height: 1.5; font-size: .95rem; white-space: pre-wrap; }
+  .user { align-self: flex-end; background: #8b1e1e; color: #fff; border-bottom-right-radius: 4px; }
+  .bot { align-self: flex-start; background: #fff; border: 1px solid #e8e0d8; border-bottom-left-radius: 4px; }
+  .bot .sources { margin-top: 8px; font-size: .75rem; color: #8b1e1e; }
+  .bot .actions { margin-top: 6px; font-size: .75rem; color: #666; }
+  .bot .handoff { margin-top: 6px; font-size: .75rem; color: #c0392b; font-weight: 600; }
+  #input-bar { display: flex; gap: 8px; padding: 14px 20px; background: #fff; border-top: 1px solid #e8e0d8; }
+  #input-bar input { flex: 1; padding: 10px 14px; border: 1px solid #d4c9bc; border-radius: 8px; font-size: .95rem; }
+  #input-bar button { padding: 10px 20px; background: #8b1e1e; color: #fff; border: none; border-radius: 8px; font-size: .95rem; cursor: pointer; }
+  #input-bar button:disabled { opacity: .5; cursor: default; }
+  .typing { font-style: italic; color: #999; font-size: .85rem; }
+</style>
+</head>
+<body>
+<header><h1>Meher Sweets &amp; Namkeen</h1><span>AI Assistant</span></header>
+<div id="chat"></div>
+<div id="input-bar">
+  <input id="msg" type="text" placeholder="Ask about prices, policies, orders..." autofocus />
+  <button id="send" onclick="send()">Send</button>
+</div>
+<script>
+let convId = 'web-' + Math.random().toString(36).slice(2, 10);
+const chat = document.getElementById('chat');
+const input = document.getElementById('msg');
+const btn = document.getElementById('send');
+
+function addMsg(text, who, extra) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + who;
+  d.textContent = text;
+  if (extra) d.innerHTML += extra;
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+  return d;
+}
+
+async function send() {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addMsg(text, 'user');
+  btn.disabled = true;
+  const botMsg = addMsg('', 'bot');
+  const typing = document.createElement('div');
+  typing.className = 'typing';
+  typing.textContent = 'Typing...';
+  botMsg.appendChild(typing);
+
+  try {
+    const resp = await fetch('/chat/stream', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({conversation_id: convId, message: text})
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let full = '';
+    typing.remove();
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const lines = buf.split('\\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6);
+        if (data === '[DONE]') continue;
+        const obj = JSON.parse(data);
+        if (obj.delta) { full += obj.delta; botMsg.textContent = full; chat.scrollTop = chat.scrollHeight; }
+        if (obj.sources) {
+          let extra = '';
+          if (obj.sources.length) extra += '<div class="sources">Sources: ' + obj.sources.join(', ') + '</div>';
+          if (obj.actions && obj.actions.length) extra += '<div class="actions">Actions: ' + obj.actions.map(a => a.type).join(', ') + '</div>';
+          if (obj.handoff) extra += '<div class="handoff">Handed off to the shop team</div>';
+          botMsg.innerHTML = full + extra;
+        }
+      }
+    }
+  } catch (e) {
+    typing.remove();
+    botMsg.textContent = 'Sorry, something went wrong. Please try again.';
+  }
+  btn.disabled = false;
+  input.focus();
+}
+
+input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+</script>
+</body>
+</html>
+"""
+
 
 def _run_turn(message: str, conversation_id: str, services: Services) -> AgentOutcome:
     """The one call into the agent loop.
@@ -144,17 +252,10 @@ def _model_name(services: Services) -> str:
     return fallback if isinstance(fallback, str) and fallback else "unknown"
 
 
-@app.get("/")
-def index() -> dict[str, Any]:
-    return {
-        "service": _SERVICE_NAME,
-        "version": _SERVICE_VERSION,
-        "endpoints": {
-            "chat": "POST /chat  {conversation_id, message}",
-            "leads": "GET /leads",
-            "health": "GET /health",
-        },
-    }
+@app.get("/", response_class=HTMLResponse)
+def index() -> str:
+    """Serve the chat UI."""
+    return _CHAT_HTML
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -186,6 +287,54 @@ def chat(payload: ChatRequest, response: Response, services: ServicesDep) -> Cha
         actions=[action.to_public() for action in outcome.actions if action.ok],
         handoff=outcome.handoff,
     )
+
+
+@app.post("/chat/stream")
+def chat_stream(payload: ChatRequest, services: ServicesDep) -> StreamingResponse:
+    """Stream the reply as Server-Sent Events.
+
+    The turn runs to completion first (the model is called once), then the reply
+    is streamed word-by-word so the UI can render it as it arrives. This is a
+    showcase convenience, not true token streaming — the LLM client does not
+    support it yet.
+    """
+    conversation_id = payload.conversation_id.strip()
+    message = payload.message.strip()
+    if not conversation_id:
+        raise HTTPException(status_code=422, detail=_BLANK_CONVERSATION_ID)
+    if not message:
+        raise HTTPException(status_code=422, detail=_BLANK_MESSAGE)
+
+    try:
+        outcome = _run_turn(message, conversation_id, services)
+    except Exception as exc:
+        logger.error(
+            "stream turn failed for conversation %s: %s",
+            conversation_id,
+            mask_text(f"{type(exc).__name__}: {exc}"),
+        )
+        outcome = None
+
+    def generate():
+        if outcome is None:
+            yield f"data: {json.dumps({'error': 'turn failed'})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        reply = outcome.reply
+        words = reply.split(" ")
+        for i, word in enumerate(words):
+            chunk = word + (" " if i < len(words) - 1 else "")
+            yield f"data: {json.dumps({'delta': chunk})}\n\n"
+        yield f"data: {json.dumps({'sources': list(outcome.sources), 'actions': [a.to_public() for a in outcome.actions if a.ok], 'handoff': outcome.handoff})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/chat", response_class=HTMLResponse)
+def chat_page() -> str:
+    """A minimal chat UI for showcasing the agent."""
+    return _CHAT_HTML
 
 
 @app.get("/leads", response_model=list[dict[str, Any]])

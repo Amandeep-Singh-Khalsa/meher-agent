@@ -512,27 +512,55 @@ def test_overlong_first_reply_keeps_the_disclosure_inside_the_limit(config, corp
 
 
 def test_intent_repair_spends_one_call_when_no_tool_was_called(config, corpus) -> None:
-    """A complaint the model ignored is nudged once, then handled by the guard.
+    """A lead the model tried to save but got wrong is nudged once.
 
-    The nudge path is exercised on a complaint rather than a lead, because a lead
-    the model fails to save is now captured from the message itself, which is
-    covered by ``test_a_lead_the_model_forgets_is_saved_deterministically``.
+    The nudge path is exercised on a lead where the model attempts a tool call
+    that the registry rejects. A complaint the model ignored is now escalated
+    deterministically, which is covered by
+    ``test_a_complaint_the_model_ignores_is_escalated_deterministically``.
     """
     outcome, llm, _ = turn(
-        COMPLAINT,
+        LEAD,
         [
-            text_reply("I am sorry to hear that."),
-            tool_call("escalate", {"reason": "damaged delivery"}, call_id="call_nudge"),
-            text_reply("The team will call you today."),
+            tool_call("save_lead", {"name": "Ritu", "need": "boxes", "phone": "12345"}),
+            text_reply("Let me note that down."),
+            tool_call(
+                "save_lead",
+                {"name": "Ritu Malhotra", "need": "30 gift boxes", "email": "ritu.m@example.com"},
+                call_id="call_nudge",
+            ),
+            text_reply("Noted. Our team will confirm the 3 days' notice and the advance by email."),
         ],
         config=config,
         corpus=corpus,
     )
 
     assert outcome.intent_repairs == 1
-    assert outcome.model_calls == 3
+    assert outcome.model_calls == 4
+    assert [action.type for action in outcome.actions] == ["save_lead"]
+    assert llm.calls[2][-1]["content"] == NUDGE_TOOL
+
+
+def test_a_complaint_the_model_ignores_is_escalated_deterministically(config, corpus) -> None:
+    """The model answered but never escalated. The guard detected the complaint,
+    so the loop escalates on its behalf — the same way a lead is captured when
+    the model forgets the tool. The model's reply is discarded because the guard
+    writes the apology and handoff.
+    """
+    outcome, llm, services = turn(
+        COMPLAINT,
+        [text_reply("I am sorry to hear that. Let me check with the team.")],
+        config=config,
+        corpus=corpus,
+    )
+
     assert [action.type for action in outcome.actions] == ["escalate"]
-    assert llm.calls[1][-1]["content"] == NUDGE_TOOL
+    assert outcome.handoff is True
+    assert services.tools.handoff_for("c1") is True
+    assert outcome.model_calls == 1
+    assert outcome.intent_repairs == 0
+    assert "team" in outcome.reply.lower() or "call" in outcome.reply.lower()
+    assert outcome.used_fallback_reply is True
 
 
 def test_a_lead_the_model_forgets_is_saved_deterministically(config, corpus) -> None:
@@ -846,10 +874,15 @@ def test_fallback_reply_still_cites_evidence(config, corpus) -> None:
 
 
 def test_prose_escalate_is_run_and_never_shown_to_the_customer(config, corpus) -> None:
+    """A complaint the model wrote as prose is escalated deterministically.
+
+    The model wrote the escalation as text instead of calling the tool. The guard
+    detected the complaint, so the loop escalates on its behalf. The model's
+    prose is discarded because the guard writes the apology and handoff.
+    """
     outcome, _, services = turn(
         COMPLAINT,
         [
-            text_reply("I am sorry about that."),
             text_reply(
                 'I am sorry about that. escalate {"reason": "the gift box arrived crushed"}'
             ),
@@ -858,7 +891,7 @@ def test_prose_escalate_is_run_and_never_shown_to_the_customer(config, corpus) -
         corpus=corpus,
     )
 
-    assert outcome.model_calls == 2
+    assert outcome.model_calls == 1
     assert [action.type for action in outcome.actions] == ["escalate"]
     assert outcome.handoff is True
     assert services.tools.handoff_for("c1") is True
@@ -893,16 +926,16 @@ def test_prose_save_lead_is_rescued_so_the_lead_is_really_written(config, corpus
 
 def test_prose_call_with_unreadable_json_is_stripped_and_reported(config, corpus) -> None:
     outcome, _, _ = turn(
-        COMPLAINT,
+        PRICE_QUESTION,
         [
-            text_reply("I am sorry about that."),
-            text_reply('I am sorry about that. escalate {"reason": '),
+            text_reply('It is Rs 780. save_lead {"name": '),
+            text_reply("It is Rs 780."),
         ],
         config=config,
         corpus=corpus,
     )
 
-    assert "escalate" not in outcome.reply
+    assert "save_lead" not in outcome.reply
     assert "{" not in outcome.reply
     assert outcome.reply.strip()
     assert len(outcome.tool_errors) == 1
