@@ -1,0 +1,56 @@
+# Normalise text in the repository and check it out as LF everywhere. The
+# harness diffs and hashes JSONL and Python sources, and a CRLF checkout makes
+# "unchanged" bytes depend on whose machine produced them.
+* text=auto eol=lf
+
+# Source and configuration: always LF, never converted.
+*.py text eol=lf
+*.sh text eol=lf
+Makefile text eol=lf
+*.toml text eol=lf
+*.cfg text eol=lf
+*.ini text eol=lf
+*.txt text eol=lf
+
+# Case files and docs: line-oriented, hashed byte for byte by the harness.
+*.json text eol=lf
+*.jsonl text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Data files: keep exactly as authored. Git must not convert line endings in
+# prices.csv or the policy/business markdown; the oracle hashes them as-is.
+data/** -text
+*.csv -text
+
+# Binary formats, declared by extension because git cannot sniff them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.bmp binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.whl binary
+*.so binary
+*.dll binary
+*.dylib binary
+*.exe binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+
+# Generated artefacts: byte-stable, and left out of `git archive` exports.
+reports/** -text export-ignore
+*.egg-info export-ignore
+.pytest_cache/** export-ignore
+__pycache__/** export-ignore

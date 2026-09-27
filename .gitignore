@@ -12,4 +12,6 @@ dist/
 node_modules/
 *.log
 reports/iterations/*.tmp
+reports/partial-*.json
+dhanur-task-*.zip
 .DS_Store

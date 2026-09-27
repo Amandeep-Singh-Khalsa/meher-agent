@@ -98,6 +98,17 @@ _MONTHS = frozenset(
 )
 #: "10 pm", "6 o'clock": a time of day, not an amount.
 _TIME_WORDS = frozenset({"pm", "am", "oclock", "hrs"})
+#: Elapsed durations. A number next to one of these measures time, not a count of
+#: items: "delivered 30 minutes ago" is a single damaged box, not 30 gift boxes.
+_ELAPSED_UNITS = frozenset(
+    {
+        "min", "mins", "minute", "minutes", "hr", "hrs", "hour", "hours",
+        "sec", "secs", "second", "seconds", "day", "days", "week", "weeks",
+        "month", "months", "year", "years", "मिनट", "घंटे", "घंटा", "दिन",
+    }
+)
+#: "... 2 hours ago" - the number is a duration even when the unit is dropped.
+_AGO_NEAR = re.compile(r"^\s*(?:[a-z\u0900-\u097F]+\s+){0,2}ago\b", re.IGNORECASE)
 #: Rupee amounts and percentages are money, not counts.
 _MONEY_WORDS = frozenset({"rs", "inr", "rupees", "rupaiya", "rupaye", "lakh", "lacs"})
 _CURRENCY_BEFORE = re.compile(r"(?:\u20b9|rs\.?|inr)\s*$", re.IGNORECASE)
@@ -412,6 +423,13 @@ class OrderResolver:
         before = tokens[index - 1].key if index else ""
         # "3 November", "November 3", "10 pm" and a bare year are not amounts ordered.
         if after in _MONTHS or before in _MONTHS or after in _TIME_WORDS:
+            return None
+        # An elapsed duration is not a count: "delivered 30 minutes ago" is one
+        # crushed box, not thirty gift boxes. Without this, a complaint becomes a
+        # 30-box order and the guard quotes a total the customer never asked for.
+        if after in _ELAPSED_UNITS or before in _ELAPSED_UNITS:
+            return None
+        if _AGO_NEAR.match(text[token.end:token.end + 12]):
             return None
         if value == int(value) and 1900 <= value <= 2100 and not after:
             return None

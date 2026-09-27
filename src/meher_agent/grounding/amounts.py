@@ -25,7 +25,10 @@ _PREFIX = r"(?:₹|(?<![A-Za-z])Rs\.?|\bINR\b|रु\.?|रूपये|रु�
 # A currency marker, immediately after the number.
 _SUFFIX = r"(?:rupees|rupaye|रुपये|रूपये)"
 
-_NUM = r"\d{1,3}(?:,\d{2,3})*|\d+"
+# A number, optionally carrying thousands separators. The grouped form REQUIRES at
+# least one comma group: without the (?!\d) boundary "\d{1,3}" would match a
+# prefix of a longer run and silently truncate it ("Rs 1200" -> 120).
+_NUM = r"(?:\d{1,3}(?:,\d{2,3})+(?!\d)|\d+)"
 
 # Longest markers first so "Rs." wins over "Rs" and "रूपये" over "रु".
 _RE_AMOUNT = re.compile(
