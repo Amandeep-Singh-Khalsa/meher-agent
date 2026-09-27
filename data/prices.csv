@@ -1,0 +1,15 @@
+sku,item,pack,price_inr,type,contains,shelf_life_days
+KK-1000,Kaju Katli,1 kg,1200,dry sweet,cashew,10
+KK-500,Kaju Katli,500 g,620,dry sweet,cashew,10
+KKSF-500,Sugar-free Kaju Katli,500 g,780,dry sweet,cashew,10
+ML-1000,Motichoor Laddoo,1 kg,560,dry sweet,,7
+BL-1000,Besan Laddoo,1 kg,520,dry sweet,,10
+SP-500,Soan Papdi,500 g,240,dry sweet,,30
+GJ-1000,Gulab Jamun,1 kg,480,milk sweet,milk,2
+RM-500,Rasmalai,500 g,340,milk sweet,milk,2
+NM-400,Mixed Namkeen,400 g,180,namkeen,peanuts,45
+AB-400,Aloo Bhujia,400 g,150,namkeen,,45
+SM-1,Samosa,1 piece,20,fresh snack,wheat,0
+DH-500,Khaman Dhokla,500 g,160,fresh snack,,1
+GBS,Diwali Gift Box Small (500 g assorted sweets),1 box,650,gift box,cashew; milk,7
+GBL,Diwali Gift Box Large (1 kg assorted sweets and 200 g dry fruits),1 box,1450,gift box,cashew; almonds; milk,7

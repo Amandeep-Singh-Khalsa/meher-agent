@@ -1,0 +1,53 @@
+# Meher Sweets & Namkeen - agent configuration.
+# Everything tunable lives here, not in code. Model access is env-var only
+# (LLM_BASE_URL, LLM_API_KEY, LLM_MODEL) so any OpenAI-compatible endpoint works.
+
+[llm]
+# Sampling temperature for the tool-calling loop. 0.0 maximises run-to-run
+# reproducibility, which the 3x repeat evaluation depends on.
+temperature = 0.0
+# Hard cap on model calls per customer message. Exceeding it = implicit escalate.
+max_steps = 4
+# Context window requested from the endpoint.
+num_ctx = 8192
+request_timeout_s = 120.0
+max_retries = 2
+retry_backoff_s = 1.5
+
+[agent]
+# Safety rails enforced in code, not by the model.
+max_reply_chars = 1200
+min_reply_chars = 1
+# One repair model call is allowed when the reply guard rejects a draft.
+allow_reply_repair = true
+# One "you must call the tool now" nudge when a lead/complaint turn produced no
+# tool call. Still inside the max_steps budget.
+allow_intent_repair = true
+
+[retrieval]
+section_top_k = 4
+sku_top_k = 5
+# BM25 parameters (hand-rolled, no external dependency).
+bm25_k1 = 1.5
+bm25_b = 0.75
+# Minimum score for a section to be considered relevant at all.
+min_section_score = 0.35
+
+[cost]
+# Rupees per 1 USD at the provider's published rate. Used for the
+# "cost in Rs per 100 conversations" metric in reports/summary.md.
+inr_per_usd = 87.0
+# USD per 1M tokens. 0.0 for a local model such as Ollama.
+input_cost_per_mtok_usd = 0.0
+output_cost_per_mtok_usd = 0.0
+
+[server]
+host = "127.0.0.1"
+port = 8000
+
+[runtime]
+log_level = "INFO"
+# Cap on in-memory conversations (LRU eviction keeps memory bounded).
+max_conversations = 5000
+# Turns kept per conversation when building the model context window.
+max_history_turns = 12
