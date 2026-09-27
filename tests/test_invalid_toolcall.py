@@ -84,7 +84,13 @@ def corpus(config: Config) -> Corpus:
     return load_corpus(config.runtime.data_dir)
 
 
-def run_with(script: list[LLMResponse], config: Config, corpus: Corpus) -> tuple[AgentOutcome, ScriptedLLM, Services]:
+def run_with(
+    script: list[LLMResponse],
+    config: Config,
+    corpus: Corpus,
+    *,
+    message: str = LEAD,
+) -> tuple[AgentOutcome, ScriptedLLM, Services]:
     llm = ScriptedLLM(script)
     leads = LeadStore()
     services = Services(
@@ -98,7 +104,7 @@ def run_with(script: list[LLMResponse], config: Config, corpus: Corpus) -> tuple
         leads=leads,
         conversations=ConversationStore(max_conversations=8, max_history_turns=12),
     )
-    return run_turn(LEAD, "c1", services), llm, services
+    return run_turn(message, "c1", services), llm, services
 
 
 # --------------------------------------------------------------------------
@@ -249,6 +255,7 @@ def test_escalate_with_a_blank_reason_is_a_tool_error(config: Config, corpus: Co
         ],
         config,
         corpus,
+        message="The gift box arrived crushed and I want a refund.",
     )
 
     assert len(outcome.tool_errors) == 1

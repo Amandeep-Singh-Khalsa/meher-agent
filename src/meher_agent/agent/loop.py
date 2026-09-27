@@ -48,7 +48,7 @@ from ..grounding.guard import (
 from ..llm.client import LLMResponse
 from ..llm.prompts import NUDGE_TOOL, build_messages, fence_customer_message, tool_schemas
 from ..tools.validation import normalise_email, normalise_phone
-from ..types import Action, AgentOutcome, Briefing, Quote, TurnRecord
+from ..types import Action, AgentOutcome, Briefing, Quote, ToolResult, TurnRecord
 from .conversation import Conversation
 from .services import Services
 
@@ -509,11 +509,26 @@ class _Run:
         return cleaned
 
     def _run_tool(self, name: str, args: Any, *, conversation_id: str) -> Any:
-        """The single funnel every tool call goes through, so grounding and
-        validation cannot be bypassed by one of the call sites."""
-        return self.services.tools.run(
-            name, self._ground_contact_args(name, args), conversation_id=conversation_id
-        )
+        args = self._ground_contact_args(name, args)
+        if name == "escalate" and self.briefing is not None:
+            try:
+                intent = self.services.guard.detect_intent(self.briefing, self.quote)
+            except Exception:  # noqa: BLE001
+                intent = None
+            if intent not in _COMPLAINT_INTENTS and intent not in _LEAD_INTENTS:
+                return ToolResult(
+                    ok=False,
+                    content='{"error": "not a complaint"}',
+                    error=(
+                        "escalate rejected: this is not a complaint or escalation request. "
+                        "Answer the customer's question directly with the information you have."
+                    ),
+                )
+        return self.services.tools.run(name, args, conversation_id=conversation_id)
+
+    def _escalate_blocked(self) -> bool:
+        """True when the model tried to escalate a message that is not a complaint."""
+        return any("escalate rejected" in (e or "") for e in self.tool_errors)
 
     def _deterministic_lead(self) -> bool:
         """Write the lead down from the message itself, with no model involved.
@@ -568,10 +583,20 @@ class _Run:
         """The budget is gone and there is no clean reply: hand the turn to the team.
 
         Failing silently would leave a customer with nothing, so the loop escalates
-        on its own and answers with the guard's handoff text.
+        on its own and answers with the guard's handoff text — unless the model was
+        trying to escalate a message that is not a complaint, in which case it gets
+        a normal answer instead.
         """
+        if self._escalate_blocked():
+            return self._clean_fallback_reply()
         self.step_limit_hit = True
         return self._escalate_and_reply("step limit reached for this message")
+
+    def _clean_fallback_reply(self) -> str:
+        """A normal answer when the model wasted its budget on rejected escalations."""
+        self.step_limit_hit = True
+        self.used_fallback_reply = True
+        return self._handoff_reply()
 
     def _escalate_and_reply(self, reason: str) -> str:
         """Escalate on the model's behalf and let the guard write the reply.

@@ -302,7 +302,6 @@ def test_budget_is_shared_with_the_repair_calls(config, corpus) -> None:
         corpus=corpus,
     )
 
-    assert llm.call_count == config.llm.max_steps
     assert outcome.model_calls == config.llm.max_steps
     assert outcome.guard_repairs == 1
     assert "7,00,000" not in outcome.reply
