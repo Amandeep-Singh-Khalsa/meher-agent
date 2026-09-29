@@ -231,6 +231,106 @@ input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
 </html>
 """
 
+_EVAL_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meher Sweets — Evaluation Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #faf7f2; color: #2d2a26; padding: 20px; }
+  h1 { font-size: 1.3rem; margin-bottom: 16px; }
+  .stats { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .stat { background: #fff; border: 1px solid #e8e0d8; border-radius: 8px; padding: 12px 20px; min-width: 120px; }
+  .stat .num { font-size: 1.8rem; font-weight: 700; }
+  .stat .lbl { font-size: .8rem; color: #888; }
+  .pass { color: #27ae60; }
+  .fail { color: #e74c3c; }
+  #cases { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow-y: auto; }
+  .case { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #fff; border: 1px solid #e8e0d8; border-radius: 6px; font-size: .85rem; }
+  .case .id { font-weight: 600; min-width: 100px; }
+  .case .cat { color: #888; min-width: 80px; }
+  .case .lat { color: #666; margin-left: auto; }
+  .case .verdict { font-weight: 700; }
+  .case.pass { border-left: 4px solid #27ae60; }
+  .case.fail { border-left: 4px solid #e74c3c; }
+  .spark { display: inline-block; width: 60px; height: 16px; background: linear-gradient(90deg, #27ae60 0%, #e74c3c 100%); border-radius: 3px; margin-left: 8px; }
+</style>
+</head>
+<body>
+<h1>Evaluation Dashboard</h1>
+<div class="stats">
+  <div class="stat"><div class="num" id="passed">0</div><div class="lbl">Passed</div></div>
+  <div class="stat"><div class="num" id="failed">0</div><div class="lbl">Failed</div></div>
+  <div class="stat"><div class="num" id="total">0</div><div class="lbl">Total</div></div>
+  <div class="stat"><div class="num" id="p50">—</div><div class="lbl">p50 latency</div></div>
+</div>
+<div id="cases"></div>
+<script>
+const cases = document.getElementById('cases');
+const passedEl = document.getElementById('passed');
+const failedEl = document.getElementById('failed');
+const totalEl = document.getElementById('total');
+const p50El = document.getElementById('p50');
+let passed = 0, failed = 0, latencies = [];
+
+function sparkline(lat) {
+  const max = Math.max(...lat, 1);
+  return lat.map(l => {
+    const h = Math.round((l / max) * 16);
+    return `<span style="display:inline-block;width:3px;height:${h}px;background:#8b1e1e;margin:0 1px;vertical-align:bottom"></span>`;
+  }).join('');
+}
+
+function addCase(data) {
+  const div = document.createElement('div');
+  div.className = 'case ' + (data.passed ? 'pass' : 'fail');
+  const failedChecks = data.checks.filter(c => !c.passed && !c.skipped).map(c => c.name);
+  div.innerHTML = `<span class="id">${data.case_id}</span><span class="cat">${data.category}</span><span class="verdict">${data.passed ? 'PASS' : 'FAIL'}</span>${failedChecks.length ? `<span style="color:#e74c3c">${failedChecks.join(', ')}</span>` : ''}<span class="lat">${data.latency_s.toFixed(1)}s</span>`;
+  cases.appendChild(div);
+  cases.scrollTop = cases.scrollHeight;
+  if (data.passed) passed++; else failed++;
+  latencies.push(data.latency_s);
+  passedEl.textContent = passed;
+  failedEl.textContent = failed;
+  totalEl.textContent = passed + failed;
+  const sorted = [...latencies].sort((a,b) => a-b);
+  const p50 = sorted[Math.floor(sorted.length * 0.5)] || 0;
+  p50El.textContent = p50.toFixed(1) + 's';
+}
+
+async function run() {
+  const resp = await fetch('/eval/stream', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({})
+  });
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, {stream: true});
+    const lines = buf.split('\\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6);
+      if (data === '[DONE]') continue;
+      const obj = JSON.parse(data);
+      if (obj.error) { console.error(obj.error); continue; }
+      addCase(obj);
+    }
+  }
+}
+run();
+</script>
+</body>
+</html>
+"""
+
 
 def _run_turn(message: str, conversation_id: str, services: Services) -> AgentOutcome:
     """The one call into the agent loop.
@@ -331,23 +431,70 @@ def chat_stream(payload: ChatRequest, services: ServicesDep) -> StreamingRespons
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-@app.get("/chat", response_class=HTMLResponse)
-def chat_page() -> str:
-    """A minimal chat UI for showcasing the agent."""
-    return _CHAT_HTML
+@app.post("/eval/stream")
+def eval_stream(
+    cases: str = "evals/cases.jsonl",
+    repeats: int = 3,
+    concurrency: int = 2,
+    services: ServicesDep = None,
+) -> StreamingResponse:
+    """Run the evaluation and stream live per-case results as SSE.
+
+    Unlike a simple progress bar, this streams each case's verdict, failing
+    checks, and latency as it completes, so the UI can show a live pass/fail
+    breakdown and latency sparkline — not just a percentage.
+    """
+    import threading
+
+    from pathlib import Path
+
+    from evals.runner import run_cases
+
+    def generate():
+        def on_case(result, done, total):
+            payload = {
+                "case_id": result.case_id,
+                "category": result.category,
+                "passed": result.passed,
+                "checks": [
+                    {"name": c.name, "passed": c.passed, "skipped": c.skipped}
+                    for c in result.checks
+                ],
+                "latency_s": sum(result.latencies_s),
+                "done": done,
+                "of": total,
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
+
+        try:
+            run_cases(
+                Path(cases),
+                base_url="http://127.0.0.1:8000",
+                repeats=repeats,
+                out_dir=Path("reports"),
+                concurrency=concurrency,
+                on_case=on_case,
+            )
+        except Exception as exc:  # noqa: BLE001
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+
+@app.get("/eval", response_class=HTMLResponse)
+def eval_page() -> str:
+    return _EVAL_HTML
 
 
 @app.get("/leads", response_model=list[dict[str, Any]])
 def leads(services: ServicesDep) -> list[dict[str, Any]]:
-    # `LeadStore.all()` hands back insertion order, so the oldest lead is first
-    # and the newest is last.
     return [lead.to_public_masked(mask_value) for lead in services.leads.all()]
 
 
 @app.get("/health", response_model=dict[str, Any])
 def health(services: ServicesDep) -> dict[str, Any]:
-    # Liveness of the process is independent of the model: a cold or broken
-    # endpoint must not take the service out of rotation.
     return {
         "status": "ok",
         "model": _model_name(services),
@@ -355,7 +502,6 @@ def health(services: ServicesDep) -> dict[str, Any]:
         "max_steps": getattr(services.config.llm, "max_steps", None),
         "leads": len(services.leads.all()),
     }
-
 
 @app.exception_handler(RequestValidationError)
 def on_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:

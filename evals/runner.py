@@ -345,6 +345,7 @@ def run_once(
     cases_path: Path,
     concurrency: int = 1,
     run_id: str = "0",
+    on_case: Any = None,
 ) -> RunSummary:
     started_at = _now()
     run = RunSummary(
@@ -371,6 +372,8 @@ def run_once(
                 "results": [r.to_dict() for r in run.results],
             },
         )
+        if on_case is not None:
+            on_case(result, len(run.results), total)
 
     if concurrency <= 1:
         for case in cases:
@@ -415,6 +418,7 @@ def run_cases(
     only: str | None = None,
     category: str | None = None,
     wait_s: float = _READY_TIMEOUT_S,
+    on_case: Any = None,
 ) -> list[RunSummary]:
     """Replay ``cases_path`` ``repeats`` times and write the reports.
 
@@ -469,6 +473,7 @@ def run_cases(
                         cases_path=cases_path,
                         concurrency=concurrency,
                         run_id=run_id,
+                        on_case=on_case,
                     )
                 )
             except KeyboardInterrupt:
